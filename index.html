@@ -2,10 +2,15 @@
 
 <h1>svgedit</h1>
 <div class=div_ui>
-<button id=btn_pen>pen</button>
-<button id=btn_select>select</button>
-<button id=btn_erase>erase</button>
+<label><input type=radio name=tool id=radio_select checked>select</label>
+<label><input type=radio name=tool id=radio_pen>pen</label>
+<label><input type=radio name=tool id=radio_erase>erace</label>
+<label><input type=color id=color_stroke value="#000000">stroke</label>
+<label><input type=color id=color_fill value="#ff0000">fill</label>
+<label><input type=number id=num_width value="5" style="width:2em">width</label>
+<label><input type="checkbox" id=chk_fill checked>fill</input></label>
 <button id=btn_download>download</button>
+<button id=btn_new>new</button>
 </div>
 <main class="canvas-wrap">
   <svg id="svg" class="canvas" tabindex="0" aria-label="Editor Canvas" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -14,40 +19,13 @@
 
 <a href=https://github.com/code4fukui/svgedit/>src on GitHub</a><br>
 
-<style>
-body {
-  font-family: sans-serif;
-  text-align: center;
-}
-h1 {
-  padding: 0;
-  margin: 0;
-}
-.div_ui {
-  margin: .5em;
-}
-.canvas-wrap {
-  position: relative;
-  x-background: #0a0e16;
-}
-.canvas {
- 
-  margin: auto;
-  display: inline-block;
-  width: 80vw;
-  height: 80vh;
-  border: 1px solid black;
-}
-.overlay{
-  position: absolute;
-  inset:0;
-  pointer-events: none;
-}
-
-</style>
-
 <script type="module">
 import { downloadFile } from "https://js.sabae.cc/downloadFile.js";
+import { setDropFilesListener } from "https://js.sabae.cc/setDropFilesListener.js";
+import { waitFileRead } from "https://js.sabae.cc/waitFileRead.js";
+import { parsePathSVG } from "https://code4fukui.github.io/sabae-font/parsePathSVG.js";
+import { cmdMove, cmdLine, cmdQuad } from "./pathcmds.js";
+import { svgPathToArray } from "./svgPathToArray.js";
 
 const state = {
   tool: 'pen',
@@ -75,6 +53,7 @@ const pathToD = (path) => {
     if (c.t === 'M') return `M${round(c.x)} ${round(c.y)}`;
     if (c.t === 'L') return `L${round(c.x)} ${round(c.y)}`;
     if (c.t === 'Q') return `Q${round(c.cx)} ${round(c.cy)} ${round(c.x)} ${round(c.y)}`;
+    if (c.t === 'C') return `C${round(c.cx)} ${round(c.cy)} ${round(c.cx2)} ${round(c.cy2)} ${round(c.x)} ${round(c.y)}`;
     if (c.t === 'Z') return 'Z';
   }).join(' ')
 }
@@ -110,11 +89,11 @@ const drawGlyph = () => {
   // preview outline
   const path = makeSVG('path', {
     d: pathToD(g.path),
-    fill: "none",
-    //fill: $('#fillToggle').checked ? 'rgba(153,179,255,.25)' : 'none',
-    stroke:'#8ab4ff',
+    //fill: "none",
+    fill: chk_fill.checked ? color_fill.value : 'none', // 'rgba(153,179,255,.25)'
+    stroke: color_stroke.value, //'#8ab4ff',
     //'stroke-width': $('#strokeWidth').value,
-    'stroke-width': 5,
+    'stroke-width': num_width.value,
   });
   glyphLayer.appendChild(path);
 
@@ -132,8 +111,29 @@ const drawGlyph = () => {
       }));;
       activeLayer.appendChild(pointHandle(c.cx, c.cy, i, 'ctrl'));
     }
+    if (c.t === 'C') {
+      activeLayer.appendChild(makeSVG('line', {
+        x1: c.cx,
+        y1: c.cy,
+        x2: c.cx2,
+        y2: c.cy2,
+        stroke: '#394b72',
+        'stroke-dasharray': '4,4'
+      }));;
+      activeLayer.appendChild(pointHandle(c.cx, c.cy, i, 'ctrl'));
+
+      activeLayer.appendChild(makeSVG('line', {
+        x1: c.cx2,
+        y1: c.cy2,
+        x2: c.x,
+        y2: c.y,
+        stroke: '#394b72',
+        'stroke-dasharray': '4,4'
+      }));;
+      activeLayer.appendChild(pointHandle(c.cx2, c.cy2, i, 'ctrl2'));
+    }
     if (c.t !== 'Z') {
-      activeLayer.appendChild(pointHandle(c.x, c.y, i, 'node'));
+      activeLayer.appendChild(pointHandle(c.x, c.y, i, 'node', c.t));
     }
   }
 
@@ -150,9 +150,17 @@ const drawGlyph = () => {
   //$('#sel-char').textContent = g.ch || '—';
   //$('#gw').value = g.adv; $('#lb').value=g.lb; $('#rb').value=g.rb;
 }
-const pointHandle = (x, y, idx, kind) => {
-  const r = kind === 'node'? 6 : 5;
-  const color = kind === 'node' ? '#aee' : '#fea';
+const pointHandle = (x, y, idx, kind, type) => {
+  const r = kind === 'node' ? 6 : 5;
+  const nodecolor = {
+    M: '#aee',
+    L: '#eae',
+    Q: '#eea',
+    C: '#aea',
+  };
+  const ncolor = nodecolor[type];
+  const color = kind === 'node' ? ncolor : '#fea';
+  if (!color) throw new Error("not define yet " + type + " " + kind);
   const h = makeSVG('circle', { cx: x, cy: y, r, fill: '#0d1626', stroke: color, 'stroke-width': 2 });
   h.classList.add('handle');
   h.dataset.idx = idx;
@@ -167,9 +175,6 @@ const curr = () => state.glyphs[state.sel];
 function newGlyph(ch) {
   return { ch, adv: state.font.adv, lb:0, rb:0, path: { cmds: [] } };
 }
-function cmdMove(x, y) { return { t: 'M', x, y } }
-function cmdLine(x, y) { return { t: 'L', x, y } }
-function cmdQuad(x, y, cx, cy) { return { t: 'Q', x, y, cx, cy } }
 
 // Pen tool (tap to add L, drag to add Q)
 const pen = { drawing: false, last: null };
@@ -194,7 +199,7 @@ function penMove(p) {
   if (last && last.t === 'L') { // convert to Q while dragging
     const mid = [(pen.last[0] + p[0]) / 2, (pen.last[1] + p[1]) / 2];
     g.path.cmds[g.path.cmds.length - 1] = cmdQuad(p[0], p[1], mid[0], mid[1]);
-  } else if (last && last.t === 'Q') {
+  } else if (last && (last.t === 'Q' || last.t === 'C')) {
     last.x = p[0];
     last.y = p[1];
   }
@@ -213,16 +218,34 @@ const dist2 = (a,b) => {
   return dx * dx + dy * dy;
 };
 const hitHandle = (p) => {
+  const maxr = 100;
+  const maxr2 = maxr * maxr;
+  
   const g = curr();
   if (!g) return null;
+  let res = null;
+  let minr = maxr2;
+  const chk = (x, y, idx, kind) => {
+    const r = dist2(p, [x, y]);
+    if (r < minr) {
+      res = { idx, kind};
+      minr = r;
+    }
+  };
   for (let i = g.path.cmds.length - 1; i >= 0; i--) {
     const c = g.path.cmds[i];
-    if (c.t==='Q') {
-      if (dist2(p, [c.cx, c.cy]) < 9) return { idx: i, kind: 'ctrl'}
+    if (c.t === 'Q') {
+      chk(c.cx, c.cy, i, 'ctrl');
     };
-    if (c.t !== 'Z' && dist2(p, [c.x, c.y]) < 12) return { idx: i, kind: 'node'}
+    if (c.t === 'C') {
+      chk(c.cx, c.cy, i, 'ctrl');
+      chk(c.cx2, c.cy2, i, 'ctrl2');
+    };
+    if (c.t !== 'Z') {
+      chk(c.x, c.y, i, 'node');
+    }
   }
-  return null;
+  return res;
 }
 
 const nodeDown = (p) => {
@@ -245,9 +268,12 @@ const nodeMove = (p) => {
   if (drag.kind === 'node') {
     c.x = p[0];
     c.y = p[1];
-  } else {
+  } else if (drag.kind == 'ctrl') {
     c.cx = p[0];
     c.cy = p[1];
+  } else if (drag.kind == 'ctrl2') {
+    c.cx2 = p[0];
+    c.cy2 = p[1];
   }
   drawGlyph();
 };
@@ -337,24 +363,44 @@ const setTool = (t) => {
   state.drawing = false;
   //['select','pen','node','erase'].forEach(id=> $('#tool-'+id).setAttribute('aria-pressed', id===t ? 'true':'false'))
 };
-btn_pen.onclick = () => setTool("pen");
-btn_select.onclick = () => setTool("select");
-btn_erase.onclick = () => setTool("erase");
+const radios = [radio_select, radio_pen, radio_erase];
+const checkTool = () => {
+  if (radio_select.checked) setTool("select");
+  if (radio_pen.checked) setTool("pen");
+  if (radio_erase.checked) setTool("erase");
+};
+for (const c of radios) {
+  c.onchange = () => checkTool();
+}
+checkTool();
+
 btn_download.onclick = () => {
   const g = state.glyphs[state.sel];
   if (!g) return;
   const path = makeSVG('path', {
     d: pathToD(g.path),
-    fill: "none",
-    //fill: $('#fillToggle').checked ? 'rgba(153,179,255,.25)' : 'none',
-    stroke:'#8ab4ff',
+    //fill: "none",
+    fill: chk_fill.checked ? color_fill.value : 'none',
+    stroke: color_stroke.value,
     //'stroke-width': $('#strokeWidth').value,
-    'stroke-width': 5,
+    'stroke-width': num_width.value,
   });
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" version="1.0" viewBox="0 0 1000 1000">
 ${path.outerHTML}
 </svg>`;
   downloadFile("svgedit.svg", new TextEncoder().encode(svg));
+};
+
+btn_new.onclick = () => {
+  if (confirm("all clear?")) {
+    g.path.cmds.length = 0;
+    drawGlyph();
+  }
+};
+
+const redraw = [chk_fill, color_stroke, color_fill, num_width];
+for (const c of redraw) {
+  c.oninput = () => drawGlyph();
 };
 
 // Keyboard shortcuts
@@ -371,4 +417,57 @@ window.addEventListener('keydown', (e)=>{
   */
 });
 
+// drop
+setDropFilesListener(document.body, async (files) => {
+  const f = files[0].file;
+  const bin = await waitFileRead(f);
+  const txt = new TextDecoder().decode(bin);
+  const d = parsePathSVG(txt);
+  const cmds = svgPathToArray(d.path, { scaleX: 8, scaleY: 8, offsetX: -250, offsetY: -350 });
+  const g = state.glyphs[state.sel];
+  g.path.cmds = cmds;
+  drawGlyph();
+});
+
+const txt = await (await fetch("temp/9.svg")).text();
+const d = parsePathSVG(txt);
+const cmds = svgPathToArray(d.path, { scaleX: 8, scaleY: 8, offsetX: -250, offsetY: -350 });
+const g = state.glyphs[state.sel];
+g.path.cmds = cmds;
+drawGlyph();
+
 </script>
+
+<style>
+body {
+  font-family: sans-serif;
+  text-align: center;
+}
+h1 {
+  padding: 0;
+  margin: 0;
+}
+.div_ui {
+  margin: .5em;
+}
+.canvas-wrap {
+  position: relative;
+  x-background: #0a0e16;
+}
+.canvas {
+ 
+  margin: auto;
+  display: inline-block;
+  width: 80vw;
+  height: 80vh;
+  border: 1px solid black;
+}
+.overlay {
+  position: absolute;
+  inset:0;
+  pointer-events: none;
+}
+
+</style>
+
+</body></html>
