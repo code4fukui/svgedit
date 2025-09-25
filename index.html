@@ -1,0 +1,374 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" href="data:">
+
+<h1>svgedit</h1>
+<div class=div_ui>
+<button id=btn_pen>pen</button>
+<button id=btn_select>select</button>
+<button id=btn_erase>erase</button>
+<button id=btn_download>download</button>
+</div>
+<main class="canvas-wrap">
+  <svg id="svg" class="canvas" tabindex="0" aria-label="Editor Canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  <!--<div class="overlay" id="overlay" aria-hidden="true"></div>-->
+</main>
+
+<a href=https://github.com/code4fukui/svgedit/>src on GitHub</a><br>
+
+<style>
+body {
+  font-family: sans-serif;
+  text-align: center;
+}
+h1 {
+  padding: 0;
+  margin: 0;
+}
+.div_ui {
+  margin: .5em;
+}
+.canvas-wrap {
+  position: relative;
+  x-background: #0a0e16;
+}
+.canvas {
+ 
+  margin: auto;
+  display: inline-block;
+  width: 80vw;
+  height: 80vh;
+  border: 1px solid black;
+}
+.overlay{
+  position: absolute;
+  inset:0;
+  pointer-events: none;
+}
+
+</style>
+
+<script type="module">
+import { downloadFile } from "https://js.sabae.cc/downloadFile.js";
+
+const state = {
+  tool: 'pen',
+  drawing: false,
+  grid: true,
+  snap: true,
+  metrics: true,
+  pointers: new Map(),
+  pinch: null,
+  view: { x: 0, y: 0, k: 1 }, // world->screen scale
+  font: { name:'TouchSVGFont', unitsPerEm:1000, ascent:800, descent:-200, adv:600 },
+  glyphs: [],
+  sel: null, // index of selected glyph
+};
+
+// util
+const makeSVG = (tag, attrs={}) => {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+};
+const round = n => Math.round(n * 100) / 100;
+const pathToD = (path) => {
+  return path.cmds.map((c, i) => {
+    if (c.t === 'M') return `M${round(c.x)} ${round(c.y)}`;
+    if (c.t === 'L') return `L${round(c.x)} ${round(c.y)}`;
+    if (c.t === 'Q') return `Q${round(c.cx)} ${round(c.cy)} ${round(c.x)} ${round(c.y)}`;
+    if (c.t === 'Z') return 'Z';
+  }).join(' ')
+}
+/*
+function setStatus(msg){$('#status').textContent = msg || ''}
+function worldToScreen([x,y]){ const r=svg.getBoundingClientRect(); const sx=(x-state.view.x)*state.view.k; const sy=( (state.font.unitsPerEm - y) + state.view.y)*state.view.k; return [sx,sy] }
+*/
+const screenToWorld = ([sx,sy]) => {
+  const x = sx / state.view.k + state.view.x;
+  //const y = state.font.unitsPerEm - (sy / state.view.k - state.view.y);
+  const y = sy / state.view.k - state.view.y;
+  return [x, y];
+};
+/*
+function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
+*/
+//
+
+const glyphLayer = makeSVG('g', { id: 'glyphLayer' });
+svg.appendChild(glyphLayer);
+const activeLayer = makeSVG('g',{ id: 'active' });
+svg.appendChild(activeLayer);
+
+// Render current glyph
+const drawGlyph = () => {
+  glyphLayer.replaceChildren();
+  activeLayer.replaceChildren();
+  
+  if (state.sel == null) return;
+  const g = state.glyphs[state.sel];
+  if (!g) return;
+
+  // preview outline
+  const path = makeSVG('path', {
+    d: pathToD(g.path),
+    fill: "none",
+    //fill: $('#fillToggle').checked ? 'rgba(153,179,255,.25)' : 'none',
+    stroke:'#8ab4ff',
+    //'stroke-width': $('#strokeWidth').value,
+    'stroke-width': 5,
+  });
+  glyphLayer.appendChild(path);
+
+  // nodes
+  for (let i = 0; i < g.path.cmds.length; i++) {
+    const c = g.path.cmds[i];
+    if (c.t === 'Q') {
+      activeLayer.appendChild(makeSVG('line', {
+        x1: c.cx,
+        y1: c.cy,
+        x2: c.x,
+        y2: c.y,
+        stroke: '#394b72',
+        'stroke-dasharray': '4,4'
+      }));;
+      activeLayer.appendChild(pointHandle(c.cx, c.cy, i, 'ctrl'));
+    }
+    if (c.t !== 'Z') {
+      activeLayer.appendChild(pointHandle(c.x, c.y, i, 'node'));
+    }
+  }
+
+  // advance / bearings
+  /*
+  const A = makeSVG('g', { stroke:'#2c3f66','stroke-width':'2'});
+  A.appendChild(makeSVG('line',{x1:0,y1:-2000,x2:0,y2:2000}));
+  A.appendChild(makeSVG('line',{x1:g.adv,y1:-2000,x2:g.adv,y2:2000}));
+  glyphLayer.appendChild(A);
+  */
+
+  //pathd.value = pathToD(g.path);
+  //console.log(g.path, pathToD(g.path));
+  //$('#sel-char').textContent = g.ch || '—';
+  //$('#gw').value = g.adv; $('#lb').value=g.lb; $('#rb').value=g.rb;
+}
+const pointHandle = (x, y, idx, kind) => {
+  const r = kind === 'node'? 6 : 5;
+  const color = kind === 'node' ? '#aee' : '#fea';
+  const h = makeSVG('circle', { cx: x, cy: y, r, fill: '#0d1626', stroke: color, 'stroke-width': 2 });
+  h.classList.add('handle');
+  h.dataset.idx = idx;
+  h.dataset.kind = kind;
+  return h;
+};
+
+// Utilities
+const curr = () => state.glyphs[state.sel];
+
+// Glyph model: points with optional control for quadratic Q
+function newGlyph(ch) {
+  return { ch, adv: state.font.adv, lb:0, rb:0, path: { cmds: [] } };
+}
+function cmdMove(x, y) { return { t: 'M', x, y } }
+function cmdLine(x, y) { return { t: 'L', x, y } }
+function cmdQuad(x, y, cx, cy) { return { t: 'Q', x, y, cx, cy } }
+
+// Pen tool (tap to add L, drag to add Q)
+const pen = { drawing: false, last: null };
+const penDown = (p) => {
+  const g = curr();
+  if (!g) return;
+  //if (!g.path.cmds.length) {
+  if (!state.drawing) {
+    g.path.cmds.push(cmdMove(p[0], p[1]));
+    state.drawing = true;
+  } else {
+    g.path.cmds.push(cmdLine(p[0], p[1]));
+  }
+  pen.drawing = true;
+  pen.last = p;
+  drawGlyph();
+};
+function penMove(p) {
+  if (!pen.drawing) return;
+  const g = curr();
+  const last = g.path.cmds[g.path.cmds.length - 1];
+  if (last && last.t === 'L') { // convert to Q while dragging
+    const mid = [(pen.last[0] + p[0]) / 2, (pen.last[1] + p[1]) / 2];
+    g.path.cmds[g.path.cmds.length - 1] = cmdQuad(p[0], p[1], mid[0], mid[1]);
+  } else if (last && last.t === 'Q') {
+    last.x = p[0];
+    last.y = p[1];
+  }
+  drawGlyph();
+}
+function penUp() {
+  pen.drawing = false;
+}
+
+// Node tool / selection
+const drag = { active: false, idx: null, kind: null, off: [0, 0] };
+
+const dist2 = (a,b) => {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  return dx * dx + dy * dy;
+};
+const hitHandle = (p) => {
+  const g = curr();
+  if (!g) return null;
+  for (let i = g.path.cmds.length - 1; i >= 0; i--) {
+    const c = g.path.cmds[i];
+    if (c.t==='Q') {
+      if (dist2(p, [c.cx, c.cy]) < 9) return { idx: i, kind: 'ctrl'}
+    };
+    if (c.t !== 'Z' && dist2(p, [c.x, c.y]) < 12) return { idx: i, kind: 'node'}
+  }
+  return null;
+}
+
+const nodeDown = (p) => {
+  const g = curr();
+  if (!g) return;
+  const h = hitHandle(p);
+  if (h) {
+    drag.active = true;
+    drag.idx = h.idx;
+    drag.kind = h.kind;
+    return;
+  }
+  // add new point
+  //if(state.tool==='node'){ g.path.cmds.push(cmdLine(p[0],p[1])); drawGlyph() }
+}
+const nodeMove = (p) => {
+  if (!drag.active) return;
+  const g = curr();
+  const c = g.path.cmds[drag.idx];
+  if (drag.kind === 'node') {
+    c.x = p[0];
+    c.y = p[1];
+  } else {
+    c.cx = p[0];
+    c.cy = p[1];
+  }
+  drawGlyph();
+};
+const eraseOne = (p) => {
+  const g = curr();
+  if (!g) return;
+  const h = hitHandle(p);
+  if (h) {
+    const ism = g.path.cmds[h.idx].t == "M";
+    g.path.cmds.splice(h.idx, 1);
+    if (ism) { // if first node on the line, change Q to M
+      const c0 = g.path.cmds[h.idx];
+      if (c0) {
+        c0.t = "M";
+        delete c0.cx;
+        delete c0.cy;
+      }
+    }
+    drawGlyph();
+  }
+}
+
+// ui
+const onPointerDown = (e) => {
+  svg.setPointerCapture(e.pointerId);
+  state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  /*
+  if (state.pointers.size===2){
+    state.pinch = startPinch(); return }
+  */
+  const p = screenToWorld([e.offsetX, e.offsetY]);
+  if (state.tool === 'pen') {
+    penDown(p);
+  } else if (state.tool==='select' || state.tool==='node') {
+    nodeDown(p);
+  } else if (state.tool === 'erase') {
+    eraseOne(p);
+  }
+};
+function onPointerMove(e) {
+  const ptr = state.pointers.get(e.pointerId);
+  if (!ptr) return;
+  const dx = e.clientX - ptr.x;
+  const dy = e.clientY - ptr.y;
+  ptr.x = e.clientX;
+  ptr.y = e.clientY;
+  if (state.pointers.size >= 2) {
+    pinchMove();
+    return;
+  }
+
+  const p = screenToWorld([e.offsetX, e.offsetY]);
+  if (state.tool==='pen') {
+    penMove(p);
+  } else if (state.tool==='select' || state.tool==='node') {
+    nodeMove(p);
+  }
+}
+function onPointerUp(e) {
+  state.pointers.delete(e.pointerId);
+  if (state.pointers.size < 2) state.pinch = null;
+  if (state.tool==='pen') penUp();
+  if (drag.active) {
+    drag.active = false;
+  }
+};
+
+svg.addEventListener('pointerdown', onPointerDown);
+svg.addEventListener('pointermove', onPointerMove);
+svg.addEventListener('pointerup', onPointerUp);
+
+// Add default glyph A
+const ensureOne = () => {
+  if (state.glyphs.length ===0) {
+    state.glyphs.push(newGlyph('A'));
+    state.sel = 0;
+    //refreshGlyphList();
+    drawGlyph();
+    //fit();
+  }
+};
+ensureOne();
+
+
+const setTool = (t) => {
+  state.tool = t;
+  state.drawing = false;
+  //['select','pen','node','erase'].forEach(id=> $('#tool-'+id).setAttribute('aria-pressed', id===t ? 'true':'false'))
+};
+btn_pen.onclick = () => setTool("pen");
+btn_select.onclick = () => setTool("select");
+btn_erase.onclick = () => setTool("erase");
+btn_download.onclick = () => {
+  const g = state.glyphs[state.sel];
+  if (!g) return;
+  const path = makeSVG('path', {
+    d: pathToD(g.path),
+    fill: "none",
+    //fill: $('#fillToggle').checked ? 'rgba(153,179,255,.25)' : 'none',
+    stroke:'#8ab4ff',
+    //'stroke-width': $('#strokeWidth').value,
+    'stroke-width': 5,
+  });
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" version="1.0" viewBox="0 0 1000 1000">
+${path.outerHTML}
+</svg>`;
+  downloadFile("svgedit.svg", new TextEncoder().encode(svg));
+};
+
+// Keyboard shortcuts
+window.addEventListener('keydown', (e)=>{
+  if (e.key==='p' || e.key==='P') setTool('pen');
+  if (e.key==='s' || e.key==='S') setTool('select');
+  if (e.key==='e' || e.key==='E') setTool('erase');
+  /*
+  if (e.key==='n' || e.key==='N') setTool('node');
+  if (e.key==='g' || e.key==='G') $('#btn-grid').click();
+  if (e.key==='m' || e.key==='M') $('#btn-metrics').click();
+  if (e.key==='s' || e.key==='S') $('#btn-snap').click();
+  if (e.key==='f' || e.key==='F') fit();
+  */
+});
+
+</script>
