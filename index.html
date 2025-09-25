@@ -429,7 +429,9 @@ setDropFilesListener(document.body, async (files) => {
   drawGlyph();
 });
 
-const txt = await (await fetch("temp/9.svg")).text();
+//const url = "temp/9.svg";
+const url = "https://code4fukui.github.io/sabae-font/src_split_svg/9.svg";
+const txt = await (await fetch(url)).text();
 const d = parsePathSVG(txt);
 const cmds = svgPathToArray(d.path, { scaleX: 8, scaleY: 8, offsetX: -250, offsetY: -350 });
 const g = state.glyphs[state.sel];
