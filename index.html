@@ -19,6 +19,7 @@
 <label><input type=number id=num_width value="5" style="width:2em">width</label>
 <label><input type="checkbox" id=chk_fill checked>fill</input></label>
 <button id=btn_new>new</button>
+<button id=btn_fit>fit</button>
 <button id=btn_download>download</button>
 </div>
 <main class="canvas-wrap">
@@ -48,6 +49,8 @@ const state = {
   font: { name:'TouchSVGFont', unitsPerEm:1000, ascent:800, descent:-200, adv:600 },
   glyphs: [],
   sel: null, // index of selected glyph
+  forcePan: false, // Spaceキーで一時的にパンモード
+  dragPan: { active: false, last: [0, 0] },
 };
 
 // util
@@ -68,17 +71,20 @@ const pathToD = (path) => {
 }
 /*
 function setStatus(msg){$('#status').textContent = msg || ''}
-function worldToScreen([x,y]){ const r=svg.getBoundingClientRect(); const sx=(x-state.view.x)*state.view.k; const sy=( (state.font.unitsPerEm - y) + state.view.y)*state.view.k; return [sx,sy] }
 */
-const screenToWorld = ([sx,sy]) => {
+const worldToScreen = ([x, y]) => {
+  const r = svg.getBoundingClientRect();
+  const sx = (x - state.view.x) * state.view.k;
+  const sy = (/*(state.font.unitsPerEm - y) +*/ y - state.view.y) * state.view.k;
+  return [sx, sy];
+};
+const screenToWorld = ([sx, sy]) => {
   const x = sx / state.view.k + state.view.x;
   //const y = state.font.unitsPerEm - (sy / state.view.k - state.view.y);
-  const y = sy / state.view.k - state.view.y;
+  const y = sy / state.view.k + state.view.y;
   return [x, y];
 };
-/*
-function clamp(v,min,max){return Math.max(min, Math.min(max, v))}
-*/
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 //
 
 const glyphLayer = makeSVG('g', { id: 'glyphLayer' });
@@ -109,6 +115,7 @@ const drawGlyph = () => {
   // nodes
   for (let i = 0; i < g.path.cmds.length; i++) {
     const c = g.path.cmds[i];
+    const strokeWidth = 2 / state.view.k;
     if (c.t === 'Q') {
       activeLayer.appendChild(makeSVG('line', {
         x1: c.cx,
@@ -116,6 +123,7 @@ const drawGlyph = () => {
         x2: c.x,
         y2: c.y,
         stroke: '#394b72',
+        'stroke-width': strokeWidth,
         'stroke-dasharray': '4,4'
       }));;
       activeLayer.appendChild(pointHandle(c.cx, c.cy, i, 'ctrl'));
@@ -127,6 +135,7 @@ const drawGlyph = () => {
         x2: c.cx2,
         y2: c.cy2,
         stroke: '#394b72',
+        'stroke-width': strokeWidth,
         'stroke-dasharray': '4,4'
       }));;
       activeLayer.appendChild(pointHandle(c.cx, c.cy, i, 'ctrl'));
@@ -137,6 +146,7 @@ const drawGlyph = () => {
         x2: c.x,
         y2: c.y,
         stroke: '#394b72',
+        'stroke-width': strokeWidth,
         'stroke-dasharray': '4,4'
       }));;
       activeLayer.appendChild(pointHandle(c.cx2, c.cy2, i, 'ctrl2'));
@@ -160,7 +170,7 @@ const drawGlyph = () => {
   //$('#gw').value = g.adv; $('#lb').value=g.lb; $('#rb').value=g.rb;
 }
 const pointHandle = (x, y, idx, kind, type) => {
-  const r = kind === 'node' ? 6 : 5;
+  const r = (kind === 'node' ? 6 : 5) / state.view.k;
   const nodecolor = {
     M: '#aee',
     L: '#eae',
@@ -170,7 +180,11 @@ const pointHandle = (x, y, idx, kind, type) => {
   const ncolor = nodecolor[type];
   const color = kind === 'node' ? ncolor : '#fea';
   if (!color) throw new Error("not define yet " + type + " " + kind);
-  const h = makeSVG('circle', { cx: x, cy: y, r, fill: '#0d1626', stroke: color, 'stroke-width': 2 });
+  const h = makeSVG('circle', {
+    cx: x, cy: y, r,
+    fill: '#0d1626', stroke: color,
+    'stroke-width': 2 / state.view.k,
+  });
   h.classList.add('handle');
   h.dataset.idx = idx;
   h.dataset.kind = kind;
@@ -349,6 +363,14 @@ const onPointerDown = (e) => {
   if (state.pointers.size===2){
     state.pinch = startPinch(); return }
   */
+  // 中ボタン or Space押下中はパン開始
+  if (e.button === 1 || state.forcePan) {
+    state.dragPan.active = true;
+    state.dragPan.last = [e.clientX, e.clientY];
+    svg.style.cursor = 'grabbing';
+    e.preventDefault();
+    return;
+  }
   const p = screenToWorld([e.offsetX, e.offsetY]);
   if (state.tool === 'pen') {
     penDown(p);
@@ -365,24 +387,37 @@ function onPointerMove(e) {
   const dy = e.clientY - ptr.y;
   ptr.x = e.clientX;
   ptr.y = e.clientY;
+  /*
   if (state.pointers.size >= 2) {
     pinchMove();
     return;
   }
+  */
+  // pan
+  if (state.dragPan.active){
+    state.view.x -= dx / state.view.k;   // 画面px → ワールド座標へ
+    state.view.y -= dy / state.view.k;  // yはスクリーン上↓が+なので反転
+    updateView();
+    return;
+  }
 
   const p = screenToWorld([e.offsetX, e.offsetY]);
-  if (state.tool==='pen') {
+  if (state.tool === 'pen') {
     penMove(p);
-  } else if (state.tool==='select' || state.tool === 'add') {
+  } else if (state.tool === 'select' || state.tool === 'add') {
     nodeMove(p);
   }
 }
 function onPointerUp(e) {
   state.pointers.delete(e.pointerId);
   if (state.pointers.size < 2) state.pinch = null;
-  if (state.tool==='pen') penUp();
+  if (state.tool === 'pen') penUp();
   if (drag.active) {
     drag.active = false;
+  }
+  if (state.dragPan.active) {
+    state.dragPan.active = false;
+    svg.style.cursor = state.forcePan ? 'grab' : '';
   }
 };
 
@@ -448,6 +483,40 @@ btn_new.onclick = () => {
   }
 };
 
+const zoomAt = ([sx, sy], factor) => {
+  const before = screenToWorld([sx, sy]);
+  state.view.k = clamp(state.view.k * factor, 0.05, 20);
+  const after = screenToWorld([sx, sy]);
+  state.view.x += before[0] - after[0];
+  state.view.y += before[1] - after[1];
+  updateView();
+}
+const updateView = () => {
+  const r = svg.getBoundingClientRect();
+  svg.setAttribute('viewBox', `${state.view.x} ${/*-state.font.unitsPerEm - */state.view.y} ${r.width / state.view.k} ${r.height / state.view.k}`);
+  /*
+  $('#zoomDisplay').textContent = Math.round(state.view.k*100)+'%';
+  drawGrid();
+  drawMetrics();
+  */
+  drawGlyph();
+};
+
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = -e.deltaY;
+  const factor = Math.exp(delta * 0.001);
+  zoomAt([e.offsetX, e.offsetY], factor);
+}, { passive: false });
+
+btn_fit.onclick = () => {
+  const r = svg.getBoundingClientRect();
+  state.view.k = r.height / state.font.unitsPerEm;
+  state.view.x = -200;
+  state.view.y = 0;
+  updateView();
+};
+
 const redraw = [chk_fill, color_stroke, color_fill, num_width];
 for (const c of redraw) {
   c.oninput = () => drawGlyph();
@@ -466,6 +535,20 @@ window.addEventListener('keydown', (e)=>{
   if (e.key==='f' || e.key==='F') fit();
   */
 });
+
+// Space で Hand（パン）モード
+window.addEventListener('keydown', (e)=> {
+  if (e.code === 'Space') {
+    state.forcePan = true;
+    svg.style.cursor = 'grab';
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') {
+    state.forcePan = false;
+    if (!state.dragPan.active) svg.style.cursor = '';
+  }
+});;
 
 // drop
 setDropFilesListener(document.body, async (files) => {
