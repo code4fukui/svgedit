@@ -3,14 +3,23 @@
 <h1>svgedit</h1>
 <div class=div_ui>
 <label><input type=radio name=tool id=radio_select checked>select</label>
+<label>
+  <select id=sel_type disabled>
+    <option value="" disabled>-</option>
+    <option value=L>line</option>
+    <option value=Q>quad</option>
+    <option value=C>curve</option>
+  </select>
+<label>
 <label><input type=radio name=tool id=radio_pen>pen</label>
+<label><input type=radio name=tool id=radio_add>add</label>
 <label><input type=radio name=tool id=radio_erase>erace</label>
 <label><input type=color id=color_stroke value="#000000">stroke</label>
 <label><input type=color id=color_fill value="#ff0000">fill</label>
 <label><input type=number id=num_width value="5" style="width:2em">width</label>
 <label><input type="checkbox" id=chk_fill checked>fill</input></label>
-<button id=btn_download>download</button>
 <button id=btn_new>new</button>
+<button id=btn_download>download</button>
 </div>
 <main class="canvas-wrap">
   <svg id="svg" class="canvas" tabindex="0" aria-label="Editor Canvas" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -252,14 +261,50 @@ const nodeDown = (p) => {
   const g = curr();
   if (!g) return;
   const h = hitHandle(p);
-  if (h) {
+  if (!h) {
+    sel_type.value = "";
+    sel_type.disabled = true;
+    return;
+  }
+  if (state.tool === 'select') {
     drag.active = true;
     drag.idx = h.idx;
     drag.kind = h.kind;
-    return;
+    const cmd = g.path.cmds[drag.idx];
+    if (cmd.t != 'M') {
+      sel_type.value = cmd.t;
+      sel_type.disabled = false;
+      sel_type.onchange = () => {
+        cmd.t = sel_type.value;
+        if (cmd.t == 'Q') {
+          if (cmd.cx === undefined) {
+            cmd.cx = cmd.x;
+            cmd.cy = cmd.y;
+          }
+        } else if (cmd.t == 'C') {
+          if (cmd.cx === undefined) {
+            cmd.cx = cmd.x;
+            cmd.cy = cmd.y;
+          }
+          if (cmd.cx2 === undefined) {
+            cmd.cx2 = cmd.cx;
+            cmd.cy2 = cmd.cy;
+          }
+        }
+        drawGlyph();
+      };
+    } else {
+      sel_type.value = "";
+      sel_type.disabled = true;
+    }
+  } else if (state.tool === 'add') { // add new point
+    const c = cmdLine(p[0], p[1]);
+    g.path.cmds.splice(h.idx + 1, 0, c);
+    drawGlyph();
+    drag.active = true;
+    drag.idx = h.idx + 1;
+    drag.kind = "node";
   }
-  // add new point
-  //if(state.tool==='node'){ g.path.cmds.push(cmdLine(p[0],p[1])); drawGlyph() }
 }
 const nodeMove = (p) => {
   if (!drag.active) return;
@@ -307,7 +352,7 @@ const onPointerDown = (e) => {
   const p = screenToWorld([e.offsetX, e.offsetY]);
   if (state.tool === 'pen') {
     penDown(p);
-  } else if (state.tool==='select' || state.tool==='node') {
+  } else if (state.tool === 'select' || state.tool === 'add') {
     nodeDown(p);
   } else if (state.tool === 'erase') {
     eraseOne(p);
@@ -328,7 +373,7 @@ function onPointerMove(e) {
   const p = screenToWorld([e.offsetX, e.offsetY]);
   if (state.tool==='pen') {
     penMove(p);
-  } else if (state.tool==='select' || state.tool==='node') {
+  } else if (state.tool==='select' || state.tool === 'add') {
     nodeMove(p);
   }
 }
@@ -361,12 +406,17 @@ ensureOne();
 const setTool = (t) => {
   state.tool = t;
   state.drawing = false;
+  if (t != "select") {
+    sel_type.value = "";
+    sel_type.disabled = true;
+  }
   //['select','pen','node','erase'].forEach(id=> $('#tool-'+id).setAttribute('aria-pressed', id===t ? 'true':'false'))
 };
-const radios = [radio_select, radio_pen, radio_erase];
+const radios = [radio_select, radio_pen, radio_add, radio_erase];
 const checkTool = () => {
   if (radio_select.checked) setTool("select");
   if (radio_pen.checked) setTool("pen");
+  if (radio_add.checked) setTool("add");
   if (radio_erase.checked) setTool("erase");
 };
 for (const c of radios) {
